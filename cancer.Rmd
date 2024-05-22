@@ -1,0 +1,192 @@
+---
+title: "cancer"
+date: "2024-05-22"
+output: html_document
+---
+
+```{r, echo=FALSE, warning=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+
+
+```{r part 1}
+
+library(cluster)
+library(factoextra)
+library(ggplot2)
+
+set.seed(123)
+
+data <- read.csv("data.csv", row.names =1)
+labels <- read.csv("labels.csv", row.names = 1)
+
+```
+
+```{r samples}
+
+non_zero_genes <- colSums(data != 0) >300
+
+gexp2 <- data[, non_zero_genes]
+
+sel_genes <- sample(colnames(gexp2), 1000)
+gexp3 <- gexp2[, sel_genes]
+
+stdgexpProj2 <- scale(gexp3)
+
+```
+
+```{r 1a}
+library(ISLR)
+
+pca_result <- prcomp(stdgexpProj2)
+
+eigenvectors <- pca_result$rotation
+eigenvals <- pca_result$sdev^2
+
+variance<- eigenvals/sum(eigenvals)
+
+dom_genes <- colnames(stdgexpProj2)[which.max(abs(eigenvectors))]
+
+cat("eigenvals (proportion of variance explained :")
+#print(variance)
+
+cum_variance <- cumsum(variance)
+significant_pcs <- which(cum_variance >= .95)
+
+cat("num of pcs explaining 95% of variance", significant_pcs)
+sig_genes <- apply(abs(eigenvectors[, 1:significant_pcs]), 2, which.max)
+domm_genes<-colnames(stdgexpProj2)[sig_genes]
+
+
+print(cum_variance[5])
+
+```
+
+
+there's genes whose linear combinations of expressions significantly contribute to the observed variation in gene expressions. This is evident from the substantial number of principal components required to explain 95% of the variance in the data. Each pc represents a linear combination of the original features (genes). The necessity for numerous principal components suggests that multiple genes contribute to the variation in gene expressions, and these combinations are needed to capture the overall variability in the data.
+
+```{r 1b}
+
+library(elasticnet)
+library(lars)
+
+comb_data <- cbind(labels, stdgexpProj2)
+
+cancer_colors <- c("PRAD" = "blue", "LUAD" = "green", "BRCA" = "red", "KIRC" = "purple", "COAD"="pink")
+
+pca_res <- prcomp(comb_data[, -1], scale. = FALSE)
+pca_scores <- pca_res$x
+
+plot(pca_scores[, 1], pca_scores[, 2], col = cancer_colors[labels$Class], pch = 16 , main = "pca visualization of cancer types")
+legend("topright", legend = unique(labels$Class), col = cancer_colors[unique(labels$Class)], pch = 16, cex = .7)
+
+library(elasticnet)
+
+#preprocessing
+comb_data_scaled <- scale(comb_data[, -1], center = TRUE, scale = TRUE)
+
+#sparse pca
+sparse_pca_res <- elasticnet::spca(comb_data_scaled, K = 2, para = rep(1e-6, 18), 
+                                   type = "predictor", sparse = "penalty", 
+                                   lambda = 1e-6, max.iter = 200, eps.conv = 1e-3)
+
+#sparse_pca_res
+
+
+```
+
+```{r 1d}
+
+
+#check cumulative variance explained by first 5 pcs
+cum_variance_5 <- cum_variance[5]
+
+threshold <- 0.8
+
+if (cum_variance_5 >= threshold) {
+  cat("the first 5 pcs explain a dominant proportion of variability in the dataset.")
+} else {
+  cat("The first 5 pcs dont explain a dominant proportion of variability in the dataset.")
+}
+
+
+barplot(variance[1:5], names.arg = paste("PC", 1:5), 
+        main = "var explained by first 5 pcs",
+        xlab = "PC", ylab = "proportion of variance explained")
+
+```
+
+# 1d
+
+The first 5 principal componenets don't explain a dominant proportion of variability in the dataset. Despite pc1 and pc2 getting a substantial amount of variability individually, the cumulative variance explained by those components, along with pc3, pc4 and pc 5, are low. PC1 explains 1.2x the variance of the original data, indicating its significance. Pc2 explains a similar amount of variance as the original data, while the other three pcs show diminishing returns in terms of capturing variability. This suggests that the remaining variance is probably spread out across a larger number of components. This is supported by the observation made in 1a, where we see numerous principle components are needed to explain 95% of the variance. 
+
+```{r p2}
+
+library(elasticnet)
+library(ggplot2)
+library(reshape2)
+
+Xsd <- scale(stdgexpProj2, center = TRUE, scale = TRUE)
+
+resB <- elasticnet::spca(Xsd, K = 18, para = rep(1e-6, 18), 
+                         type = "predictor", sparse = "penalty", 
+                         lambda = 1e-6, max.iter = 200, eps.conv = 1e-3)
+
+dim(resB$loadings)
+
+FourLD <- resB$loadings[, 1:4]
+
+colnames(FourLD) <- paste("SPC", 1:4, sep="")
+colnames(FourLD) <- paste(colnames(FourLD), "loadings", sep=" ")
+
+dstack <- melt(FourLD)
+
+ggplot(dstack, aes(x = value)) +
+  geom_histogram(bins = 25) +
+  facet_wrap(~Var2, scales = "free") +
+  theme_bw()
+
+```
+
+```{r 234e}
+
+LV1 = FourLD[, 1]
+
+DF1 = which(abs(LV1)>0)
+length(DF1)
+
+DF2= which(abs(LV1)>
+             quantile(abs(LV1[abs(LV1)>0]), probs = c(.95)))
+length(DF2)
+```
+
+```{r pve}
+
+pve = resB$pev
+par(mfrow=c(1,2), mar = c(9,4,1,3),mgp=c(1.8,.6,.3))
+plot(pve, type = "o", ylab = "adj pve", 
+     xlab ="sparse pc", col = "blue")
+plot(cumsum(pve), type = "o", ylab ="adj cum pve", 
+     xlab = "num of sparse pcs", col = "blue")
+abline(h = cumsum(pve)[11], col = "pink", lty =2)
+abline(v = 11, col = "purple", lty = 2)
+
+
+```
+
+```{r exp}
+library(sparsepca)
+library(elasticnet)
+
+resC = sparsepca::spca(Xsd, k = 18, alpha = 1e-6, beta = 1e-6, 
+                       center = T, max_iter = 200,
+                       tol = 1e-05, verbose = FALSE)
+summary(resC)
+
+
+```
+
+# 2 
+from the outputs of both pca and sparse pca, we can see that both methods give similar cululative proportions of variance explained by the principle components. for pca, the cum proportion of variance reaches approximately .405 after the first five principle components. For sparse pca, it reaches about .405 after the first five principal components as well. This suggests that both pca and sparse pca are capturing a similar amount of variability in the dataset. The visualizations of the low dimenstional structures from pca and sparse pca show comparable patterns. Both methods show clusters or seperations that may correspond to different cancer types, indicating similar findings in terms of the underlying structures of the data. However it should be noted that sparse pca offers the advantage of sparsity in the loading vectors, which potentially could provide more interpretative insight. 
+
